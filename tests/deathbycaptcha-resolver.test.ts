@@ -207,7 +207,7 @@ describe("DeathByCaptchaResolver", () => {
       const payload = client.calls[0];
 
       expect(result.success).toBe(true);
-      expect(payload.extra?.type).toBe(testCase.typeId);
+      expect(payload.extra?.["type"]).toBe(testCase.typeId);
       expect(extraParams(payload, testCase.field)).toMatchObject({
         ...testCase.expected,
         pageurl: testCase.request.url
