@@ -1,3 +1,4 @@
+import { ITaskExecutor } from "../src/interfaces";
 import { TaskOrchestrator } from "../src/orchestrator";
 import {
   BrowserManagerMock,
@@ -7,7 +8,7 @@ import {
   TaskRepositoryMock,
   WorkerMock
 } from "../src/mocks";
-import { TaskState } from "../src/models";
+import { Task, TaskState } from "../src/models";
 
 function build() {
   return new TaskOrchestrator(
@@ -17,6 +18,34 @@ function build() {
     new ShopAdapterMock(),
     new ProxyManagerMock()
   );
+}
+
+class DeferredExecutor implements ITaskExecutor {
+  readonly started: string[] = [];
+  active = 0;
+  maxActive = 0;
+
+  private readonly completions = new Map<string, (success: boolean) => void>();
+
+  execute(task: Task): Promise<boolean> {
+    this.started.push(task.id);
+    this.active += 1;
+    this.maxActive = Math.max(this.maxActive, this.active);
+
+    return new Promise(resolve => {
+      this.completions.set(task.id, success => {
+        this.completions.delete(task.id);
+        this.active -= 1;
+        resolve(success);
+      });
+    });
+  }
+
+  complete(taskId: string, success = true): void {
+    const complete = this.completions.get(taskId);
+    if (!complete) throw new Error(`Task ${taskId} is not running`);
+    complete(success);
+  }
 }
 
 describe("TaskOrchestrator", () => {
@@ -42,5 +71,36 @@ describe("TaskOrchestrator", () => {
     o.cancelTask(task.id);
 
     expect(task.state).toBe(TaskState.CANCELLED);
+  });
+
+  it("keeps excess tasks queued and starts the next task when a worker is released", async () => {
+    const executor = new DeferredExecutor();
+    const o = new TaskOrchestrator(new TaskRepositoryMock(), executor);
+
+    o.addWorker(new WorkerMock("w1"));
+    o.addWorker(new WorkerMock("w2"));
+    o.addWorker(new WorkerMock("w3"));
+
+    const tasks = Array.from({ length: 10 }, (_, index) =>
+      o.createTask({ id: `q${index + 1}`, name: `queued-${index + 1}` })
+    );
+
+    const starts = tasks.map(task => o.startTask(task.id));
+    await Promise.resolve();
+
+    expect(tasks.filter(task => task.state === TaskState.RUNNING)).toHaveLength(3);
+    expect(tasks.filter(task => task.state === TaskState.QUEUED)).toHaveLength(7);
+    expect(executor.started).toEqual(["q1", "q2", "q3"]);
+    expect(executor.maxActive).toBe(3);
+
+    executor.complete("q1");
+    await starts[0];
+    await Promise.resolve();
+
+    expect(tasks[0].state).toBe(TaskState.SUCCESS);
+    expect(tasks[3].state).toBe(TaskState.RUNNING);
+    expect(executor.started).toEqual(["q1", "q2", "q3", "q4"]);
+    expect(executor.active).toBe(3);
+    expect(executor.maxActive).toBe(3);
   });
 });
