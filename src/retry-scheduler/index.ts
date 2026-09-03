@@ -2,7 +2,7 @@ import { EventBus } from "../event-bus";
 import { Task } from "../models";
 
 export class RetryScheduler {
-  private readonly scheduled = new Map<string, NodeJS.Timeout>();
+  private readonly scheduled = new Map<string, ReturnType<typeof setTimeout>>();
 
   constructor(private readonly eventBus: EventBus) {}
 
