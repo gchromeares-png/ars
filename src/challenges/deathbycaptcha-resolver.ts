@@ -27,6 +27,10 @@ type DbcModule = {
   HttpClient: new (username: string, password: string) => DbcClient;
 };
 
+type MissingParameter = { missing: string };
+type ProviderParameterValue = string | number | boolean | null | undefined | MissingParameter;
+type ProviderParameters = Record<string, ProviderParameterValue>;
+
 type ProviderPayloadResult =
   | { payload: DbcDecodePayload }
   | { error: string };
@@ -308,14 +312,20 @@ export class DeathByCaptchaResolver implements IChallengeResolver {
     request: ChallengeRequest,
     typeId: number,
     parameterFieldName: string,
-    mappedParameters: ChallengeParameters
+    mappedParameters: ProviderParameters
   ): ProviderPayloadResult {
     const missing = Object.entries(mappedParameters).find(
-      ([, value]) => value === null || value === undefined || value === ""
+      ([, value]) =>
+        value === null || value === undefined || value === "" || this.isMissingMarker(value)
     );
 
     if (missing) {
-      return { error: `Missing required challenge parameter: ${missing[0]}` };
+      const [, value] = missing;
+      return {
+        error: `Missing required challenge parameter: ${
+          this.isMissingMarker(value) ? value.missing : missing[0]
+        }`
+      };
     }
 
     const params = this.cleanParameters({
@@ -344,7 +354,7 @@ export class DeathByCaptchaResolver implements IChallengeResolver {
     publicName: string,
     aliases: string[],
     fallback?: string
-  ): string | { missing: string } {
+  ): string | MissingParameter {
     const value = this.readStringParameter(request, aliases) ?? fallback;
     return value ?? { missing: publicName };
   }
@@ -361,12 +371,11 @@ export class DeathByCaptchaResolver implements IChallengeResolver {
     return undefined;
   }
 
-  private cleanParameters(parameters: ChallengeParameters): Record<string, string | number | boolean> {
+  private cleanParameters(parameters: ProviderParameters): Record<string, string | number | boolean> {
     const result: Record<string, string | number | boolean> = {};
 
     for (const [key, value] of Object.entries(parameters)) {
       if (value === null || value === undefined || value === "") continue;
-      if (typeof value === "object") continue;
       if (this.isMissingMarker(value)) continue;
       result[key] = value;
     }
@@ -389,7 +398,7 @@ export class DeathByCaptchaResolver implements IChallengeResolver {
     return undefined;
   }
 
-  private isMissingMarker(value: unknown): value is { missing: string } {
+  private isMissingMarker(value: unknown): value is MissingParameter {
     return typeof value === "object" && value !== null && "missing" in value;
   }
 }
