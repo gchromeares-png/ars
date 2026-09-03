@@ -24,6 +24,8 @@ export class TaskOrchestrator {
   private readonly workerPool = new WorkerPool(this.eventBus);
   private readonly registry: TaskRegistry;
   private readonly executor: ITaskExecutor;
+  private readonly pendingTaskIds: string[] = [];
+  private readonly pendingTaskIdSet = new Set<string>();
 
   constructor(
     repository: ITaskRepository,
@@ -75,7 +77,12 @@ export class TaskOrchestrator {
     }
 
     const workerId = this.workerPool.assignTask(task);
-    if (!workerId) return;
+    if (!workerId) {
+      this.enqueueTask(taskId);
+      return;
+    }
+
+    this.removePendingTask(taskId);
 
     try {
       this.transition(task, TaskState.STARTING);
@@ -83,7 +90,7 @@ export class TaskOrchestrator {
       this.eventBus.emit("taskStarted", task);
 
       const success = await this.executor.execute(task);
-      
+
       const currentState = task.state as TaskState;
       if (currentState === TaskState.CANCELLED) return;
 
@@ -98,6 +105,7 @@ export class TaskOrchestrator {
       await this.registry.saveTask(task.id);
     } finally {
       this.workerPool.releaseWorker(workerId);
+      this.drainQueue();
     }
   }
 
@@ -105,6 +113,7 @@ export class TaskOrchestrator {
     const task = this.registry.getTask(taskId);
     if (!task) throw new Error(`Task ${taskId} not found`);
 
+    this.removePendingTask(taskId);
     this.cancellationManager.cancelTask(taskId);
     void this.executor.cancelTask?.(taskId).catch(error => {
       task.lastError = error instanceof Error ? error.message : String(error);
@@ -118,6 +127,7 @@ export class TaskOrchestrator {
 
   addWorker(worker: IWorker): void {
     this.workerPool.addWorker(worker);
+    this.drainQueue();
   }
 
   getAvailableWorkers(): number {
@@ -140,9 +150,39 @@ export class TaskOrchestrator {
   }
 
   cleanup(): void {
+    this.pendingTaskIds.length = 0;
+    this.pendingTaskIdSet.clear();
     this.retryScheduler.cleanup();
     this.cancellationManager.cleanup();
     for (const worker of this.workerPool.getAllWorkers()) worker.stop();
+  }
+
+  private enqueueTask(taskId: string): void {
+    if (this.pendingTaskIdSet.has(taskId)) return;
+    this.pendingTaskIdSet.add(taskId);
+    this.pendingTaskIds.push(taskId);
+  }
+
+  private removePendingTask(taskId: string): void {
+    if (!this.pendingTaskIdSet.delete(taskId)) return;
+
+    const index = this.pendingTaskIds.indexOf(taskId);
+    if (index >= 0) this.pendingTaskIds.splice(index, 1);
+  }
+
+  private drainQueue(): void {
+    while (this.workerPool.getAvailableWorkers() > 0 && this.pendingTaskIds.length > 0) {
+      const taskId = this.pendingTaskIds.shift();
+      if (!taskId) return;
+
+      this.pendingTaskIdSet.delete(taskId);
+      const task = this.registry.getTask(taskId);
+      if (!task || task.state !== TaskState.QUEUED) continue;
+
+      void this.startTask(taskId).catch(error => {
+        task.lastError = error instanceof Error ? error.message : String(error);
+      });
+    }
   }
 
   private transition(task: Task, newState: TaskState): void {
