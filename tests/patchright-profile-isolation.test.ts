@@ -1,5 +1,5 @@
-import fs from "fs";
-import path from "path";
+import * as fs from "fs";
+import * as path from "path";
 
 describe("Patchright task profile isolation", () => {
   const executor = fs.readFileSync(path.resolve(__dirname, "../src/shopify/patchright-shopify-executor.ts"), "utf8");
