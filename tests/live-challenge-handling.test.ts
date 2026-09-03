@@ -192,14 +192,34 @@ describe("Live Challenge Handling in Browser", () => {
 
   describe("PatchrightShopifyTaskExecutor Integration", () => {
     it("fails task cleanly if live challenge cannot be resolved", async () => {
+      const product = {
+        title: "Pokemon Booster",
+        handle: "pokemon-booster",
+        variants: [{ id: 101, title: "Default", price: "4.99", available: true }]
+      };
+
       const mockPage = {
         isClosed: () => false,
         url: () => "https://shop.example.com/checkpoint",
         goto: jest.fn().mockResolvedValue(undefined),
-        evaluate: jest.fn().mockResolvedValue({
-          title: "Pokemon Booster",
-          handle: "pokemon-booster",
-          variants: [{ id: 101, title: "Default", price: "4.99", available: true }]
+        evaluate: jest.fn().mockImplementation(async (_fn: unknown, targetUrl?: string) => {
+          const url = String(targetUrl ?? "");
+          if (url.includes("/search/suggest.json")) {
+            return {
+              resources: {
+                results: {
+                  products: [{ title: product.title, handle: product.handle }]
+                }
+              }
+            };
+          }
+          if (url.includes("/products/pokemon-booster.js")) {
+            return product;
+          }
+          if (url.includes("/products.json")) {
+            return { products: [product] };
+          }
+          return {};
         })
       };
 
