@@ -330,8 +330,8 @@ export class DeathByCaptchaResolver implements IChallengeResolver {
     });
 
     if (request.proxy) {
-      params.proxy = request.proxy;
-      params.proxytype = request.proxyType ?? "HTTP";
+      params["proxy"] = request.proxy;
+      params["proxytype"] = request.proxyType ?? "HTTP";
     }
 
     return {
