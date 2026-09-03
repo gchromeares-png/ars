@@ -1,5 +1,4 @@
 import {
-  ChallengeParameters,
   ChallengeRequest,
   ChallengeResolution,
   ChallengeType,
@@ -191,7 +190,7 @@ export class DeathByCaptchaResolver implements IChallengeResolver {
         return this.buildJsonExtraPayload(request, 5, "token_params", {
           googlekey: this.requireParameter(request, "googlekey", ["googlekey", "googleKey"], request.siteKey),
           action: this.readStringParameter(request, ["action"]) ?? "verify",
-          min_score: this.requireParameter(request, "min_score", ["min_score", "minScore"])
+          min_score: this.requireRawParameter(request, "min_score", ["min_score", "minScore"])
         });
       case "recaptcha-v2-enterprise":
         return this.buildJsonExtraPayload(request, 25, "token_enterprise_params", {
@@ -354,16 +353,33 @@ export class DeathByCaptchaResolver implements IChallengeResolver {
     return value ?? { missing: publicName };
   }
 
+  private requireRawParameter(
+    request: ChallengeRequest,
+    publicName: string,
+    aliases: string[]
+  ): string | number | boolean | MissingParameter {
+    const value = this.readRawParameter(request, aliases);
+    return value ?? { missing: publicName };
+  }
+
+  private readRawParameter(
+    request: ChallengeRequest,
+    names: string[]
+  ): string | number | boolean | undefined {
+    for (const name of names) {
+      const value = request.parameters?.[name];
+      if (value === null || value === undefined || value === "") continue;
+      return value;
+    }
+    return undefined;
+  }
+
   private readStringParameter(
     request: ChallengeRequest,
     names: string[]
   ): string | undefined {
-    for (const name of names) {
-      const value = request.parameters?.[name];
-      if (value === null || value === undefined || value === "") continue;
-      return String(value);
-    }
-    return undefined;
+    const value = this.readRawParameter(request, names);
+    return value === undefined ? undefined : String(value);
   }
 
   private cleanParameters(parameters: ProviderParameters): Record<string, string | number | boolean> {
