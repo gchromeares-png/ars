@@ -216,21 +216,17 @@ export class DeathByCaptchaResolver implements IChallengeResolver {
         });
       case "capy":
         return this.buildJsonExtraPayload(request, 15, "capy_params", {
-          captchakey: this.requireParameter(request, "captchakey", ["captchakey", "captchaKey"], request.siteKey),
-          api_server: this.readStringParameter(request, ["api_server", "apiServer"])
+          captchakey: this.requireParameter(request, "captchakey", ["captchakey", "captchaKey"], request.siteKey)
         });
       case "amazon-waf":
         return this.buildJsonExtraPayload(request, 16, "waf_params", {
           sitekey: this.requireParameter(request, "sitekey", ["sitekey", "siteKey"], request.siteKey),
           iv: this.requireParameter(request, "iv", ["iv"]),
-          context: this.requireParameter(request, "context", ["context"]),
-          challengejs: this.readStringParameter(request, ["challengejs", "challengeJs"]),
-          captchajs: this.readStringParameter(request, ["captchajs", "captchaJs"])
+          context: this.requireParameter(request, "context", ["context"])
         });
       case "siara":
         return this.buildJsonExtraPayload(request, 17, "siara_params", {
-          slideurlid: this.requireParameter(request, "slideurlid", ["slideurlid", "slideUrlId"]),
-          useragent: this.readStringParameter(request, ["useragent", "userAgent"])
+          slideurlid: this.requireParameter(request, "slideurlid", ["slideurlid", "slideUrlId"])
         });
       case "mtcaptcha":
         return this.buildJsonExtraPayload(request, 18, "mtcaptcha_params", {
@@ -255,8 +251,7 @@ export class DeathByCaptchaResolver implements IChallengeResolver {
         });
       case "atb":
         return this.buildJsonExtraPayload(request, 24, "atb_params", {
-          appid: this.requireParameter(request, "appid", ["appid", "appId"]),
-          apiserver: this.readStringParameter(request, ["apiserver", "apiServer"])
+          appid: this.requireParameter(request, "appid", ["appid", "appId"])
         });
       default:
         return { error: `Unsupported challenge type: ${request.type}` };
