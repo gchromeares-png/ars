@@ -1,5 +1,5 @@
-import fs from "fs";
-import path from "path";
+import * as fs from "fs";
+import * as path from "path";
 
 describe("external Node browser worker architecture", () => {
   const client = fs.readFileSync(path.resolve(__dirname, "../src/browser-worker/client.ts"), "utf8");
