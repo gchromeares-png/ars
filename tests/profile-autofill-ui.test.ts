@@ -1,5 +1,5 @@
-import fs from "fs";
-import path from "path";
+import * as fs from "fs";
+import * as path from "path";
 
 describe("Profile assignment and checkout autofill", () => {
   const component = fs.readFileSync(path.resolve(__dirname, "../src/app/app.component.ts"), "utf8");
