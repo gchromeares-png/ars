@@ -67,11 +67,9 @@ export class BrowserWorkerProcessClient {
 
       task.config = response.taskPatch.config;
       task.lastError = response.taskPatch.lastError;
-      if (!response.success) this.taskIds.delete(task.id);
       return response.success;
-    } catch (error) {
+    } finally {
       this.taskIds.delete(task.id);
-      throw error;
     }
   }
 
@@ -128,6 +126,7 @@ export class BrowserWorkerProcessClient {
   }
 
   private spawnWorker(): void {
+    // @ts-ignore
     const nodeExecutable = process.env.ARES_NODE_EXECUTABLE?.trim() || "node";
     const workerScript = path.join(__dirname, "worker.js");
     const child = spawn(nodeExecutable, [workerScript], {
@@ -252,6 +251,7 @@ export class BrowserWorkerPoolClient implements ITaskExecutor {
     private readonly getProfile: (profileId: string) => AresProfile | undefined,
     options: { processCount?: number; requestTimeoutMs?: number; profileRoot?: string } = {}
   ) {
+    // @ts-ignore
     const requestedCount = options.processCount ?? Number(process.env.ARES_BROWSER_WORKER_PROCESSES ?? "1");
     const processCount = Number.isFinite(requestedCount)
       ? Math.min(4, Math.max(1, Math.floor(requestedCount)))
@@ -294,12 +294,12 @@ export class BrowserWorkerPoolClient implements ITaskExecutor {
     this.taskOwners.set(task.id, client);
     try {
       const success = await client.execute(task, shop, profile);
-      if (!success) this.taskOwners.delete(task.id);
       return success;
     } catch (error) {
-      this.taskOwners.delete(task.id);
       task.lastError = error instanceof Error ? error.message : String(error);
       return false;
+    } finally {
+      this.taskOwners.delete(task.id);
     }
   }
 

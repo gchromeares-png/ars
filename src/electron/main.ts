@@ -1,4 +1,5 @@
 import { app, BrowserWindow, ipcMain } from "electron";
+import * as fs from "fs";
 import * as path from "path";
 import { TaskOrchestrator } from "../orchestrator";
 import { TaskRepositoryMock, WorkerMock } from "../mocks";
@@ -29,7 +30,46 @@ const shops = new Map<string, {
 }>();
 const profileRepository = new ProfileRepository();
 
+function getShopsFilePath(): string | undefined {
+  try {
+    const userData = app?.getPath ? app.getPath("userData") : undefined;
+    return userData ? path.join(userData, "shops.json") : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function persistShops(): void {
+  const filePath = getShopsFilePath();
+  if (!filePath) return;
+  try {
+    fs.writeFileSync(filePath, JSON.stringify([...shops.values()], null, 2), "utf8");
+  } catch {}
+}
+
+function loadShops(): void {
+  const filePath = getShopsFilePath();
+  if (!filePath) return;
+  try {
+    if (fs.existsSync(filePath)) {
+      const items = JSON.parse(fs.readFileSync(filePath, "utf8"));
+      if (Array.isArray(items)) {
+        for (const item of items) {
+          if (item?.id) shops.set(item.id, item);
+        }
+      }
+    }
+  } catch {}
+}
+
 function createBackend(): void {
+  try {
+    const userData = app?.getPath ? app.getPath("userData") : undefined;
+    if (userData) {
+      profileRepository.setStoragePath(path.join(userData, "profiles.json"));
+    }
+  } catch {}
+  loadShops();
   browserWorker = new BrowserWorkerPoolClient(
     shopId => shops.get(shopId),
     profileId => profileRepository.get(profileId),
@@ -120,6 +160,7 @@ ipcMain.handle("register-shop", (_event, input) => {
     platform: "shopify",
     config: input.config ?? {}
   });
+  persistShops();
 
   return { success: true };
 });

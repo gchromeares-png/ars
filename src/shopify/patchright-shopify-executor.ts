@@ -11,6 +11,8 @@ import { BezierCursorService } from "../browser/bezier-cursor-service";
 import type { BrowserWorker } from "../browser-worker/browser-worker";
 import { PatchrightBrowserWorker } from "../browser-worker/patchright-browser-worker";
 import type { ShopifyRuntimeShop } from "../browser-worker/runtime-types";
+import { LiveChallengeHandler } from "../challenges/live-challenge-handler";
+import type { LiveChallengeResult } from "../challenges/types";
 
 export type { ShopifyRuntimeShop } from "../browser-worker/runtime-types";
 
@@ -57,7 +59,8 @@ export class PatchrightShopifyTaskExecutor implements ITaskExecutor {
   constructor(
     private readonly getShop: (shopId: string) => ShopifyRuntimeShop | undefined,
     private readonly getProfile: (profileId: string) => AresProfile | undefined = () => undefined,
-    private readonly browserWorker: BrowserWorker = new PatchrightBrowserWorker()
+    private readonly browserWorker: BrowserWorker = new PatchrightBrowserWorker(),
+    private readonly liveChallengeHandler: LiveChallengeHandler = new LiveChallengeHandler()
   ) {}
 
   async execute(task: Task): Promise<boolean> {
@@ -90,7 +93,7 @@ export class PatchrightShopifyTaskExecutor implements ITaskExecutor {
     const headless = profile.browser?.headless ?? this.extractHeadless(task);
 
     // Each task receives a persistent, isolated Chrome profile owned by BrowserWorker.
-    const configuredRoot = process.env.ARES_BROWSER_PROFILE_ROOT?.trim();
+    const configuredRoot = process.env["ARES_BROWSER_PROFILE_ROOT"]?.trim();
     const profileRoot = configuredRoot || path.join(os.tmpdir(), "ares-browser-profiles");
     fs.mkdirSync(profileRoot, { recursive: true });
     const userDataDir = path.join(profileRoot, this.safePartitionName(task.id));
@@ -122,7 +125,7 @@ export class PatchrightShopifyTaskExecutor implements ITaskExecutor {
       });
       const page = handle.page;
 
-      const found = await this.findProduct(baseUrl, searchTerm);
+      const found = await this.findProduct(baseUrl, searchTerm, page);
       if (!found.ok || !found.product) {
         task.lastError = found.error || "Kein passendes verfügbares Shopify-Produkt gefunden.";
         await this.browserWorker.closeContext(task.id).catch(() => undefined);
@@ -133,8 +136,32 @@ export class PatchrightShopifyTaskExecutor implements ITaskExecutor {
       await page.goto(cartUrl, { waitUntil: "domcontentloaded", timeout: 30_000 });
       await this.sleep(900);
 
+      // Handle potential live checkpoint on cart
+      await this.liveChallengeHandler.handleLiveChallenge(page, {
+        timeoutMs: 30_000,
+        bringToFrontOnChallenge: !headless,
+        onStatusChange: status => {
+          task.config.data = { ...(task.config.data ?? {}), liveChallengeStatus: status };
+        }
+      });
+
       const checkoutUrl = new URL("/checkout", baseUrl).toString();
       await page.goto(checkoutUrl, { waitUntil: "domcontentloaded", timeout: 30_000 });
+
+      // Handle live checkpoint or captcha on checkout entry
+      const challengeResult = await this.liveChallengeHandler.handleLiveChallenge(page, {
+        timeoutMs: 60_000,
+        bringToFrontOnChallenge: !headless,
+        onStatusChange: status => {
+          task.config.data = { ...(task.config.data ?? {}), liveChallengeStatus: status };
+        }
+      });
+
+      if (challengeResult.handled && !challengeResult.resolved) {
+        task.lastError = challengeResult.error || "Live-Challenge im Browser nicht gelöst.";
+        await this.browserWorker.closeContext(task.id).catch(() => undefined);
+        return false;
+      }
 
       const checkoutProfile = await this.fillCheckoutProfile(page, profile);
 
@@ -152,7 +179,8 @@ export class PatchrightShopifyTaskExecutor implements ITaskExecutor {
           checkoutUrl,
           checkoutOpened: true,
           checkoutProfile,
-          finalPaymentSubmitted: false
+          finalPaymentSubmitted: false,
+          challenge: challengeResult
         }
       };
 
@@ -229,6 +257,9 @@ export class PatchrightShopifyTaskExecutor implements ITaskExecutor {
 
     for (let attempt = 0; attempt < 12; attempt++) {
       if (attempt > 0) await this.sleep(700);
+      if (attempt === 3 || attempt === 7) {
+        await this.liveChallengeHandler.handleLiveChallenge(page, { timeoutMs: 20_000 });
+      }
       filled = [];
       missing = [];
 
@@ -277,7 +308,7 @@ export class PatchrightShopifyTaskExecutor implements ITaskExecutor {
     return { filled: [...new Set(filled)], missing: [...new Set(missing)] };
   }
 
-  private async findProduct(baseUrl: string, searchTerm: string): Promise<ShopifyFlowResult> {
+  private async findProduct(baseUrl: string, searchTerm: string, page?: Page): Promise<ShopifyFlowResult> {
     const requestedTokens = [...new Set(this.tokenize(searchTerm))];
     if (!requestedTokens.length) return { ok: false, error: "Kein Produkt-Keyword angegeben." };
 
@@ -285,15 +316,15 @@ export class PatchrightShopifyTaskExecutor implements ITaskExecutor {
       const productUrl = new URL(searchTerm);
       const handle = productUrl.pathname.split("/products/")[1]?.split("/")[0];
       if (handle) {
-        const product = await this.readJson<ShopifyProduct>(new URL(`/products/${handle}.js`, baseUrl).toString());
+        const product = await this.readJson<ShopifyProduct>(new URL(`/products/${handle}.js`, baseUrl).toString(), page);
         const variant = this.chooseAvailableVariant(product);
         if (!variant) return { ok: false, error: `Das angegebene Produkt ist ausverkauft: ${product.title}` };
         return { ok: true, product: this.toMatch(product, variant, requestedTokens, []) };
       }
     }
 
-    const predictive = await this.predictiveSearch(baseUrl, searchTerm);
-    const products = predictive.length ? predictive : await this.fallbackCatalog(baseUrl);
+    const predictive = await this.predictiveSearch(baseUrl, searchTerm, page);
+    const products = predictive.length ? predictive : await this.fallbackCatalog(baseUrl, page);
     if (!products.length) return { ok: false, error: "Keine Produkte im Shopify-Katalog gefunden." };
 
     const scored = products.map(product => {
@@ -302,7 +333,7 @@ export class PatchrightShopifyTaskExecutor implements ITaskExecutor {
     }).sort((a, b) => b.score - a.score);
 
     for (const entry of scored.filter(item => item.info.coverage >= 0.72)) {
-      const fresh = await this.readJson<ShopifyProduct>(new URL(`/products/${entry.product.handle}.js`, baseUrl).toString()).catch(() => entry.product);
+      const fresh = await this.readJson<ShopifyProduct>(new URL(`/products/${entry.product.handle}.js`, baseUrl).toString(), page).catch(() => entry.product);
       const variant = this.chooseAvailableVariant(fresh);
       if (variant) return { ok: true, product: this.toMatch(fresh, variant, entry.info.matchedTokens, entry.info.missingTokens) };
     }
@@ -382,21 +413,21 @@ export class PatchrightShopifyTaskExecutor implements ITaskExecutor {
     return { title: product.title, handle: product.handle, variantId: Number(variant.id), variantTitle: variant.title || "Default", price: variant.price, matchedTokens, missingTokens };
   }
 
-  private async predictiveSearch(baseUrl: string, searchTerm: string): Promise<ShopifyProduct[]> {
+  private async predictiveSearch(baseUrl: string, searchTerm: string, page?: Page): Promise<ShopifyProduct[]> {
     const url = new URL("/search/suggest.json", baseUrl);
     url.searchParams.set("q", searchTerm);
     url.searchParams.set("resources[type]", "product");
     url.searchParams.set("resources[limit]", "10");
     url.searchParams.set("resources[options][unavailable_products]", "show");
     try {
-      const data = await this.readJson<any>(url.toString());
+      const data = await this.readJson<any>(url.toString(), page);
       const raw = data?.resources?.results?.products ?? [];
       const products: ShopifyProduct[] = [];
       for (const item of raw) {
         const handle = String(item?.handle ?? "");
         if (!handle) continue;
         try {
-          const hydrated = await this.readJson<any>(new URL(`/products/${handle}.js`, baseUrl).toString());
+          const hydrated = await this.readJson<any>(new URL(`/products/${handle}.js`, baseUrl).toString(), page);
           products.push({
             title: String(hydrated.title ?? item.title ?? ""),
             handle: String(hydrated.handle ?? handle),
@@ -414,13 +445,13 @@ export class PatchrightShopifyTaskExecutor implements ITaskExecutor {
     }
   }
 
-  private async fallbackCatalog(baseUrl: string): Promise<ShopifyProduct[]> {
+  private async fallbackCatalog(baseUrl: string, page?: Page): Promise<ShopifyProduct[]> {
     const key = this.normalizeBaseUrl(baseUrl);
     const cached = this.productCache.get(key);
     if (cached && cached.expiresAt > Date.now()) return cached.products;
     const products: ShopifyProduct[] = [];
-    for (let page = 1; page <= this.maxFallbackPages; page++) {
-      const catalog = await this.readJson<{ products?: ShopifyProduct[] }>(new URL(`/products.json?limit=250&page=${page}`, baseUrl).toString());
+    for (let pageNum = 1; pageNum <= this.maxFallbackPages; pageNum++) {
+      const catalog = await this.readJson<{ products?: ShopifyProduct[] }>(new URL(`/products.json?limit=250&page=${pageNum}`, baseUrl).toString(), page);
       const pageProducts = catalog.products ?? [];
       products.push(...pageProducts);
       if (pageProducts.length < 250) break;
@@ -429,18 +460,38 @@ export class PatchrightShopifyTaskExecutor implements ITaskExecutor {
     return products;
   }
 
-  private async readJson<T>(url: string, attempt = 0, redirects = 0): Promise<T> {
+  private async readJson<T>(url: string, page?: Page, attempt = 0, redirects = 0): Promise<T> {
     await this.sleep(this.requestDelayMs);
+    if (page && !page.isClosed()) {
+      try {
+        const data = await page.evaluate(async (targetUrl) => {
+          const res = await fetch(targetUrl, {
+            headers: { Accept: "application/json,text/plain,*/*" }
+          });
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          return await res.json();
+        }, url);
+        return data as T;
+      } catch {
+        // Fallback to direct HTTP request if page context evaluation fails
+      }
+    }
+
     try {
       return await new Promise<T>((resolve, reject) => {
         const parsed = new URL(url);
         const client = parsed.protocol === "http:" ? http : https;
-        const request = client.get(parsed, { headers: { Accept: "application/json,text/plain,*/*", "User-Agent": "ARES/1.0" } }, response => {
+        const request = client.get(parsed, {
+          headers: {
+            Accept: "application/json,text/plain,*/*",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+          }
+        }, response => {
           const status = response.statusCode ?? 0;
           const location = response.headers.location;
           if ([301, 302, 303, 307, 308].includes(status) && location && redirects < 5) {
             response.resume();
-            this.readJson<T>(new URL(location, parsed).toString(), attempt, redirects + 1).then(resolve).catch(reject);
+            this.readJson<T>(new URL(location, parsed).toString(), page, attempt, redirects + 1).then(resolve).catch(reject);
             return;
           }
           let body = "";
@@ -463,7 +514,7 @@ export class PatchrightShopifyTaskExecutor implements ITaskExecutor {
       const status = (error as { statusCode?: number })?.statusCode;
       if ((status === 429 || status === 503) && attempt < 3) {
         await this.sleep(800 * Math.pow(2, attempt));
-        return this.readJson<T>(url, attempt + 1, redirects);
+        return this.readJson<T>(url, page, attempt + 1, redirects);
       }
       throw error;
     }

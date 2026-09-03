@@ -197,7 +197,6 @@ export class TaskOrchestrator {
       newState === TaskState.QUEUED ? "taskQueued" :
       newState === TaskState.SUCCESS ? "taskCompleted" :
       newState === TaskState.CANCELLED ? "taskCancelled" :
-      newState === TaskState.RETRYING ? "taskRetrying" :
       "taskUpdated";
 
     this.eventBus.emit(event, task);

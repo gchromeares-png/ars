@@ -47,6 +47,13 @@ export class ElectronService {
   }
 
   onTaskStatusUpdate(callback: (task: unknown) => void): () => void {
-    return window.ares.onTaskStatusUpdate(callback);
+    const unsub = window.ares?.onTaskStatusUpdate?.(callback);
+    return () => {
+      if (typeof unsub === "function") {
+        unsub();
+      } else if (window.ares?.removeTaskStatusListener) {
+        window.ares.removeTaskStatusListener(callback);
+      }
+    };
   }
 }

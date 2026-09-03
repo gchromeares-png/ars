@@ -15,6 +15,7 @@ declare global {
       getTaskList(): Promise<any>;
       getSystemStatus(): Promise<any>;
       onTaskStatusUpdate(callback: (task: unknown) => void): () => void;
+      removeTaskStatusListener?(callback?: (task: unknown) => void): void;
     };
   }
 }

@@ -1,5 +1,7 @@
 import { contextBridge, ipcRenderer } from "electron";
 
+const taskStatusListeners = new Map<Function, (_event: Electron.IpcRendererEvent, payload: unknown) => void>();
+
 const api = {
   getProfiles: () => ipcRenderer.invoke("get-profiles"),
   saveProfile: (profile: unknown) => ipcRenderer.invoke("save-profile", profile),
@@ -14,8 +16,22 @@ const api = {
   getSystemStatus: () => ipcRenderer.invoke("get-system-status"),
   onTaskStatusUpdate: (callback: (task: unknown) => void) => {
     const listener = (_event: Electron.IpcRendererEvent, payload: unknown) => callback(payload);
+    taskStatusListeners.set(callback, listener);
     ipcRenderer.on("task-status-update", listener);
-    return () => ipcRenderer.removeListener("task-status-update", listener);
+    return () => {
+      ipcRenderer.removeListener("task-status-update", listener);
+      taskStatusListeners.delete(callback);
+    };
+  },
+  removeTaskStatusListener: (callback?: (task: unknown) => void) => {
+    if (callback && taskStatusListeners.has(callback)) {
+      const listener = taskStatusListeners.get(callback)!;
+      ipcRenderer.removeListener("task-status-update", listener);
+      taskStatusListeners.delete(callback);
+    } else {
+      ipcRenderer.removeAllListeners("task-status-update");
+      taskStatusListeners.clear();
+    }
   }
 };
 

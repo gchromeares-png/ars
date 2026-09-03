@@ -53,17 +53,26 @@ export async function launchBrowserContext(config: BrowserContextConfig): Promis
   await clearStaleChromeLocks(config.userDataDir);
 
   let context: BrowserContext | undefined;
+  const launchOptions = {
+    headless: config.headless ?? false,
+    proxy: toProxy(config.proxy),
+    userAgent: config.userAgent || undefined,
+    locale: config.locale,
+    timezoneId: config.timezoneId,
+    viewport: config.viewport === undefined ? null : config.viewport,
+    args: config.args ? [...config.args] : undefined
+  };
+
   try {
-    context = await chromium.launchPersistentContext(config.userDataDir, {
-      channel: "chrome",
-      headless: config.headless ?? false,
-      proxy: toProxy(config.proxy),
-      userAgent: config.userAgent || undefined,
-      locale: config.locale,
-      timezoneId: config.timezoneId,
-      viewport: config.viewport === undefined ? null : config.viewport,
-      args: config.args ? [...config.args] : undefined
-    });
+    try {
+      context = await chromium.launchPersistentContext(config.userDataDir, {
+        channel: "chrome",
+        ...launchOptions
+      });
+    } catch (channelError) {
+      // Fallback to default chromium if Google Chrome channel executable is missing
+      context = await chromium.launchPersistentContext(config.userDataDir, launchOptions);
+    }
 
     context.setDefaultTimeout(config.actionTimeoutMs ?? 15_000);
     context.setDefaultNavigationTimeout(config.navigationTimeoutMs ?? 30_000);
