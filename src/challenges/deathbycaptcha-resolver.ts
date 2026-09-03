@@ -52,6 +52,14 @@ export class DeathByCaptchaResolver implements IChallengeResolver {
       };
     }
 
+    if (!request.siteKey) {
+      return {
+        success: false,
+        provider: "deathbycaptcha",
+        error: "Turnstile siteKey is required"
+      };
+    }
+
     if (signal?.aborted) {
       return {
         success: false,
@@ -67,7 +75,7 @@ export class DeathByCaptchaResolver implements IChallengeResolver {
 
     if (request.proxy) {
       turnstileParams.proxy = request.proxy;
-      turnstileParams.proxytype = "HTTP";
+      turnstileParams.proxytype = request.proxyType ?? "HTTP";
     }
 
     return new Promise<ChallengeResolution>((resolve) => {
@@ -122,6 +130,7 @@ export class DeathByCaptchaResolver implements IChallengeResolver {
               success: true,
               provider: "deathbycaptcha",
               token,
+              text: token,
               jobId: captcha.captcha
             });
           }
