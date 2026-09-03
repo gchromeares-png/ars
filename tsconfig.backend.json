@@ -13,6 +13,7 @@
     "src/browser-worker/**/*.ts",
     "src/browser/**/*.ts",
     "src/cancellation-manager/**/*.ts",
+    "src/challenges/**/*.ts",
     "src/core/**/*.ts",
     "src/electron/**/*.ts",
     "src/event-bus/**/*.ts",
